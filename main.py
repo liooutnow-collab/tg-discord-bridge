@@ -115,6 +115,7 @@ class MessageFilter:
             except re.error as exc:
                 raise RuntimeError(f"Invalid FILTER_REGEX {pattern!r}: {exc}") from exc
         self.excluded = [x.casefold() for x in env_list("EXCLUDE_KEYWORDS")]
+        self.excluded_forward_sources = [x.casefold() for x in env_list("EXCLUDE_FORWARD_SOURCES")]
         self.mode = os.getenv("FILTER_MODE", "any").strip().lower()
         if self.mode not in {"any", "all"}:
             raise RuntimeError("FILTER_MODE must be 'any' or 'all'")
@@ -265,6 +266,32 @@ async def main():
             if state.already_delivered(chat_id, message.id):
                 return
             try:
+                # Exclude messages based on the original forwarded-from source.
+                fwd = getattr(message, "fwd_from", None)
+                if fwd and filters.excluded_forward_sources:
+                    source_labels = []
+                    for attr in ("from_name", "post_author"):
+                        value = getattr(fwd, attr, None)
+                        if value:
+                            source_labels.append(str(value).casefold())
+                    from_peer = getattr(fwd, "from_id", None)
+                    if from_peer:
+                        try:
+                            origin = await client.get_entity(from_peer)
+                            for attr in ("title", "username", "first_name"):
+                                value = getattr(origin, attr, None)
+                                if value:
+                                    source_labels.append(str(value).casefold())
+                        except Exception:
+                            LOG.debug("Could not resolve forwarded origin peer", exc_info=True)
+                    if any(
+                        blocked in label
+                        for blocked in filters.excluded_forward_sources
+                        for label in source_labels
+                    ):
+                        LOG.info("Excluded forwarded message %s/%s from blocked origin", chat_id, message.id)
+                        return
+
                 chat = await event.get_chat()
                 if not filters.matches(message, chat_id):
                     LOG.debug("Filtered out Telegram message %s/%s", chat_id, message.id)
