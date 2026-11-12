@@ -84,12 +84,18 @@ class MessageFilter:
         re.IGNORECASE | re.DOTALL,
     )
     UPDATE_RE = re.compile(
-        r"\b(?:tp\s*[123]?\b|take[\s-]?profit|target\s*[123]?\b|"
-        r"\bstop[\s-]?loss\b|\bsl\b|breakeven|\bbreak\s*even\b|"
-        r"\bmove\s+(?:your|all|our)\b.{0,35}\b(?:sl|stop|entry)\b|"
-        r"\b(?:pips?\s+(?:profit|secured)|profit\s+secured|"
-        r"(?:win|loss|lost|hit)\b|recover(?:y)?|double\s+lot\s*size|"
-        r"lot\s*size)\b)",
+        r"\\b(?:"
+        r"tp\\s*(?:[123]|one|two|three)?(?:\\s*(?:is|was))?\\s*(?:hit|reached|done|closed|achieved)?|"
+        r"take[\\s-]?profit|"
+        r"target\\s*(?:[123]|one|two|three)?(?:\\s*(?:is|was))?\\s*(?:hit|reached|done|closed|achieved)?|"
+        r"stop[\\s-]?loss|\\bsl\\b|breakeven|break\\s*even|"
+        r"move\\s+(?:your|all|our|the)\\b.{0,35}\\b(?:sl|stop|entry)\\b|"
+        r"(?:[+]\\s*)?\\d+(?:[.,]\\d+)?\\s*pips?\\s*(?:of\\s*)?(?:profit|secured|in\\s+profit)|"
+        r"(?:profit|gain)\\s*(?:of\\s*)?(?:[+]\\s*)?\\d+(?:[.,]\\d+)?\\s*pips?|"
+        r"\\b(?:secured|banked|locked\\s+in|made|earned|up)\\s*(?:[+]\\s*)?\\d+(?:[.,]\\d+)?\\s*pips?\\b|"
+        r"\\b(?:pips?\\s+(?:profit|secured)|profit\\s+secured|"
+        r"win|loss|lost|hit|recover(?:y)?|double\\s+lot\\s*size|lot\\s*size)\\b"
+        r")",
         re.IGNORECASE | re.DOTALL,
     )
     TRADE_CONTEXT_RE = re.compile(
