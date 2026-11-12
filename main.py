@@ -63,6 +63,48 @@ class State:
 
 
 class MessageFilter:
+    """Rule-based gold-trading classifier with short-lived per-chat context."""
+
+    PROMO_RE = re.compile(
+        r"\b(?:vip|vvip|premium\s+(?:group|signals?|membership)|"
+        r"paid\s+(?:group|signals?|membership)|subscription|subscribe|"
+        r"join\s+(?:our\s+)?(?:vip|premium)|membership|mentorship|"
+        r"course|webinar|affiliate|promo\s+code|discount|limited\s+offer)\b",
+        re.IGNORECASE,
+    )
+    ENTRY_RE = re.compile(
+        r"\b(?:xau\s*/?\s*usd|xauusd|gold)\b.{0,100}\b(?:buy|sell|long|short)\b"
+        r"|\b(?:buy|sell|long|short)\b.{0,50}\b(?:xau\s*/?\s*usd|xauusd|gold)\b"
+        r"|\bnew\s+(?:gold\s+)?trade\s+idea\b",
+        re.IGNORECASE | re.DOTALL,
+    )
+    GOLD_ACTION_RE = re.compile(
+        r"\b(?:open|take|enter|close|add|hold)\b.{0,45}\b(?:gold|xauusd|xau\s*/?\s*usd)\b"
+        r"|\b(?:gold|xauusd|xau\s*/?\s*usd)\b.{0,45}\b(?:buy|buys|sell|sells|position|trade)s?\b",
+        re.IGNORECASE | re.DOTALL,
+    )
+    UPDATE_RE = re.compile(
+        r"\b(?:tp\s*[123]?\b|take[\s-]?profit|target\s*[123]?\b|"
+        r"\bstop[\s-]?loss\b|\bsl\b|breakeven|\bbreak\s*even\b|"
+        r"\bmove\s+(?:your|all|our)\b.{0,35}\b(?:sl|stop|entry)\b|"
+        r"\b(?:pips?\s+(?:profit|secured)|profit\s+secured|"
+        r"(?:win|loss|lost|hit)\b|recover(?:y)?|double\s+lot\s*size|"
+        r"lot\s*size)\b)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    TRADE_CONTEXT_RE = re.compile(
+        r"\b(?:gold|xauusd|xau\s*/?\s*usd|forex\s+signal|trade\s+idea|"
+        r"open\s+(?:gold\s+)?(?:buys?|sells?)|live\s+free\s+gold\s+trade)\b",
+        re.IGNORECASE,
+    )
+    TRADING_COMMENT_RE = re.compile(
+        r"\b(?:be\s+ready|stay\s+tuned|inside|room|counter\s+gold|"
+        r"expecting\s+it|look\s+at\s+the\s+(?:drop|move)|"
+        r"i\s+warned\s+you|time\s+to\s+recover|part\s+of\s+the\s+game|"
+        r"one\s+more\s+(?:gold\s+)?trade|jackpot|market\s+move)\b",
+        re.IGNORECASE,
+    )
+
     def __init__(self):
         self.keywords = [x.casefold() for x in env_list("FILTER_KEYWORDS")]
         self.users = [x.lstrip("@").casefold() for x in env_list("FILTER_USERS")]
@@ -76,18 +118,39 @@ class MessageFilter:
         self.mode = os.getenv("FILTER_MODE", "any").strip().lower()
         if self.mode not in {"any", "all"}:
             raise RuntimeError("FILTER_MODE must be 'any' or 'all'")
-        if not (self.keywords or self.users or self.regexes):
-            raise RuntimeError(
-                "No forwarding filters configured. Set FILTER_KEYWORDS, "
-                "FILTER_USERS, or FILTER_REGEX so the bridge does not forward everything."
-            )
+        self.context_seconds = max(60, int(os.getenv("TRADE_CONTEXT_MINUTES", "360")) * 60)
+        self.active_trade_until: dict[int, float] = {}
 
-    def matches(self, message) -> bool:
-        text = message.raw_text or ""
+    def matches(self, message, chat_id: int = 0) -> bool:
+        import time
+
+        text = (message.raw_text or "").strip()
+        if not text:
+            return False
         folded = text.casefold()
-        if any(term in folded for term in self.excluded):
+
+        # Explicit user exclusions and promotional language always take priority.
+        if any(term in folded for term in self.excluded) or self.PROMO_RE.search(text):
             return False
 
+        now = time.time()
+        active = self.active_trade_until.get(chat_id, 0) > now
+        explicit_gold = bool(self.TRADE_CONTEXT_RE.search(text))
+        entry = bool(self.ENTRY_RE.search(text) or self.GOLD_ACTION_RE.search(text))
+        update = bool(self.UPDATE_RE.search(text))
+        commentary = bool(self.TRADING_COMMENT_RE.search(text))
+
+        # A fresh gold setup or explicit gold trade action opens the context window.
+        if entry or (explicit_gold and (update or commentary)):
+            self.active_trade_until[chat_id] = now + self.context_seconds
+            active = True
+
+        # Updates without the word gold are accepted only while a gold trade is active.
+        contextual_update = active and update
+        contextual_comment = active and commentary
+        trading_match = entry or contextual_update or contextual_comment
+
+        # Optional legacy filters can broaden matching, but never bypass promo exclusions.
         checks = []
         if self.keywords:
             checks.append(any(term in folded for term in self.keywords))
@@ -98,8 +161,10 @@ class MessageFilter:
         if self.regexes:
             checks.append(any(pattern.search(text) for pattern in self.regexes))
 
-        return all(checks) if self.mode == "all" else any(checks)
-
+        if checks:
+            configured_match = all(checks) if self.mode == "all" else any(checks)
+            return trading_match or configured_match
+        return trading_match
 
 def telegram_message_url(message, chat) -> Optional[str]:
     username = getattr(chat, "username", None)
@@ -201,7 +266,7 @@ async def main():
                 return
             try:
                 chat = await event.get_chat()
-                if not filters.matches(message):
+                if not filters.matches(message, chat_id):
                     LOG.debug("Filtered out Telegram message %s/%s", chat_id, message.id)
                     return
                 payload = build_discord_payload(message, chat)
