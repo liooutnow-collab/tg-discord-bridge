@@ -231,7 +231,7 @@ async def main():
         raise RuntimeError("Set TELEGRAM_SOURCE_CHATS to one or more group usernames or IDs")
 
     filters = MessageFilter()
-    state = State(os.getenv("DATABASE_PATH", "/app/data/bridge_state.sqlite3"))
+    state = State(os.getenv("DATABASE_PATH", "/tmp/bridge_state.sqlite3"))
     client = TelegramClient(
         StringSession(session_string),
         api_id,
